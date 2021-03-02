@@ -1,3 +1,5 @@
+dist
+package-lock.json
 
 # Created by https://www.gitignore.io/api/osx,node
 
@@ -7,7 +9,8 @@
 .LSOverride
 
 # Icon must end with two \r
-Icon
+Icon
+
 
 # Thumbnails
 ._*
@@ -19,6 +22,7 @@ Icon
 .TemporaryItems
 .Trashes
 .VolumeIcon.icns
+.idea
 
 # Directories potentially created on remote AFP share
 .AppleDB
@@ -63,4 +67,3 @@ node_modules
 
 # Optional REPL history
 .node_repl_history
-

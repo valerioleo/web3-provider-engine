@@ -1,8 +1,10 @@
 const test = require('tape')
+const series = require('async/series')
+const createGanacheProvider = require('ganache-core').provider
 const ProviderEngine = require('../index.js')
 const FixtureProvider = require('../subproviders/fixture.js')
 const CacheProvider = require('../subproviders/cache.js')
-const TestBlockProvider = require('./util/block.js')
+const ProviderSubprovider = require('../subproviders/provider.js')
 const createPayload = require('../util/create-payload.js')
 const injectMetrics = require('./util/inject-metrics')
 
@@ -70,13 +72,14 @@ cacheTest('getCode for a specific block, then for the one before it, should not 
   params: ['0x1234', '0x2'],
 }], false)
 
-cacheTest('getCode for a specific block, then the one after it, should return cached response on second request', [{
-  method: 'eth_getCode',
-  params: ['0x1234', '0x2'],
-}, {
-  method: 'eth_getCode',
-  params: ['0x1234', '0x3'],
-}], true)
+// perma-cache implementation was reduced to block-cache when we moved to eth-json-rpc-middleware
+// cacheTest('getCode for a specific block, then the one after it, should return cached response on second request', [{
+//   method: 'eth_getCode',
+//   params: ['0x1234', '0x2'],
+// }, {
+//   method: 'eth_getCode',
+//   params: ['0x1234', '0x3'],
+// }], true)
 
 cacheTest('getCode for an unspecified block, then for the latest, should return cached response on second request', [{
   method: 'eth_getCode',
@@ -86,16 +89,72 @@ cacheTest('getCode for an unspecified block, then for the latest, should return 
   params: ['0x1234', 'latest'],
 }], true)
 
+// blocks
+
+cacheTest('getBlockForNumber for latest (1) then block 0', [{
+  method: 'eth_getBlockByNumber',
+  params: ['latest', false],
+}, {
+  method: 'eth_getBlockByNumber',
+  params: ['0x0', false],
+}], false)
+
+cacheTest('getBlockForNumber for latest (1) then block 1', [{
+  method: 'eth_getBlockByNumber',
+  params: ['latest', false],
+}, {
+  method: 'eth_getBlockByNumber',
+  params: ['0x1', false],
+}], true)
+
+cacheTest('getBlockForNumber for 0 then block 1', [{
+  method: 'eth_getBlockByNumber',
+  params: ['0x0', false],
+}, {
+  method: 'eth_getBlockByNumber',
+  params: ['0x1', false],
+}], false)
+
+cacheTest('getBlockForNumber for block 0', [{
+  method: 'eth_getBlockByNumber',
+  params: ['0x0', false],
+}, {
+  method: 'eth_getBlockByNumber',
+  params: ['0x0', false],
+}], true)
+
+// storage
+
+cacheTest('getStorageAt for same block should cache', [{
+  method: 'eth_getStorageAt',
+  params: ['0x295a70b2de5e3953354a6a8344e616ed314d7251', '0x0', '0x1234'],
+}, {
+  method: 'eth_getStorageAt',
+  params: ['0x295a70b2de5e3953354a6a8344e616ed314d7251', '0x0', '0x1234'],
+}], true)
+
+cacheTest('getStorageAt for different block should not cache', [{
+  method: 'eth_getStorageAt',
+  params: ['0x295a70b2de5e3953354a6a8344e616ed314d7251', '0x0', '0x1234'],
+}, {
+  method: 'eth_getStorageAt',
+  params: ['0x295a70b2de5e3953354a6a8344e616ed314d7251', '0x0', '0x4321'],
+}], false)
+
+
 // test helper for caching
 // 1. Sets up caching and data provider
 // 2. Performs first request
 // 3. Performs second request
-// 4. checks if cache hit or missed 
+// 4. checks if cache hit or missed
 
 function cacheTest(label, payloads, shouldHitCacheOnSecondRequest){
+  if (!Array.isArray(payloads)) {
+    payloads = [payloads, payloads]
+  }
 
   test('cache - '+label, function(t){
-    t.plan(12)
+    t.plan(13)
 
     // cache layer
     var cacheProvider = injectMetrics(new CacheProvider())
@@ -136,28 +195,53 @@ function cacheTest(label, payloads, shouldHitCacheOnSecondRequest){
             input: '0x',
           })
         }
-      }
+      },
+      eth_getStorageAt: '0x00000000000000000000000000000000000000000000000000000000deadbeef',
     }))
+    
     // handle dummy block
-    var blockProvider = injectMetrics(new TestBlockProvider())
+    const ganacheProvider = createGanacheProvider()
+    var blockProvider = injectMetrics(new ProviderSubprovider(ganacheProvider))
 
     var engine = new ProviderEngine()
     engine.addProvider(cacheProvider)
     engine.addProvider(dataProvider)
     engine.addProvider(blockProvider)
 
-    engine.start()
+    engine.on('error', (err) => {
+      t.ifErr(err)
+    })
 
-    cacheCheck(t, engine, cacheProvider, dataProvider, payloads, function(err, response) {
-      engine.stop()
+    series([
+      // increment one block from #0 to #1
+      (next) => ganacheProvider.sendAsync({ id: 1, method: 'evm_mine', params: [] }, next),
+      // run polling until first block
+      (next) => {
+        engine.start()
+        engine.once('block', () => next())
+      },
+      // perform cache test
+      (next) => {
+        // stop polling
+        engine.stop()
+        // clear subprovider metrics
+        cacheProvider.clearMetrics()
+        dataProvider.clearMetrics()
+        blockProvider.clearMetrics()
+
+        // determine which provider will handle the request
+        const isBlockTest = (payloads[0].method === 'eth_getBlockByNumber') || (payloads[0].method === 'eth_blockNumber')
+        const handlingProvider = isBlockTest ? blockProvider : dataProvider
+
+        // begin cache test
+        cacheCheck(t, engine, cacheProvider, handlingProvider, payloads, next)
+      }
+    ], (err) => {
+      t.ifError(err)
       t.end()
     })
 
-    function cacheCheck(t, engine, cacheProvider, dataProvider, payloads, cb) {
-      if (!Array.isArray(payloads)) {
-        payloads = [payloads, payloads]
-      }
-
+    function cacheCheck(t, engine, cacheProvider, handlingProvider, payloads, cb) {
       var method = payloads[0].method
       requestTwice(payloads, function(err, response){
         // first request
@@ -167,8 +251,8 @@ function cacheTest(label, payloads, shouldHitCacheOnSecondRequest){
         t.equal(cacheProvider.getWitnessed(method).length, 1, 'cacheProvider did see "'+method+'"')
         t.equal(cacheProvider.getHandled(method).length, 0, 'cacheProvider did NOT handle "'+method+'"')
 
-        t.equal(dataProvider.getWitnessed(method).length, 1, 'dataProvider did see "'+method+'"')
-        t.equal(dataProvider.getHandled(method).length, 1, 'dataProvider did handle "'+method+'"')
+        t.equal(handlingProvider.getWitnessed(method).length, 1, 'handlingProvider did see "'+method+'"')
+        t.equal(handlingProvider.getHandled(method).length, 1, 'handlingProvider did handle "'+method+'"')
 
       }, function(err, response){
         // second request
@@ -179,14 +263,14 @@ function cacheTest(label, payloads, shouldHitCacheOnSecondRequest){
           t.equal(cacheProvider.getWitnessed(method).length, 2, 'cacheProvider did see "'+method+'"')
           t.equal(cacheProvider.getHandled(method).length, 1, 'cacheProvider did handle "'+method+'"')
 
-          t.equal(dataProvider.getWitnessed(method).length, 1, 'dataProvider did NOT see "'+method+'"')
-          t.equal(dataProvider.getHandled(method).length, 1, 'dataProvider did NOT handle "'+method+'"')
+          t.equal(handlingProvider.getWitnessed(method).length, 1, 'handlingProvider did NOT see "'+method+'"')
+          t.equal(handlingProvider.getHandled(method).length, 1, 'handlingProvider did NOT handle "'+method+'"')
         } else {
           t.equal(cacheProvider.getWitnessed(method).length, 2, 'cacheProvider did see "'+method+'"')
-          t.equal(cacheProvider.getHandled(method).length, 0, 'cacheProvider did handle "'+method+'"')
+          t.equal(cacheProvider.getHandled(method).length, 0, 'cacheProvider did NOT handle "'+method+'"')
 
-          t.equal(dataProvider.getWitnessed(method).length, 2, 'dataProvider did NOT see "'+method+'"')
-          t.equal(dataProvider.getHandled(method).length, 2, 'dataProvider did NOT handle "'+method+'"')
+          t.equal(handlingProvider.getWitnessed(method).length, 2, 'handlingProvider did see "'+method+'"')
+          t.equal(handlingProvider.getHandled(method).length, 2, 'handlingProvider did handle "'+method+'"')
         }
 
         cb()

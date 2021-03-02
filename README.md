@@ -2,7 +2,7 @@
 
 Web3 ProviderEngine is a tool for composing your own [web3 providers](https://github.com/ethereum/wiki/wiki/JavaScript-API#web3).
 
-Status: WIP - expect breaking changes and strange behaviour
+Originally created for MetaMask, but has been superceded by [json-rpc-engine](https://www.npmjs.com/package/json-rpc-engine) in combination with our [eth-json-rpc-middleware](https://www.npmjs.com/package/eth-json-rpc-middleware). This module is not very actively maintained, so we recommend using that one instead.
 
 ### Composable
 
@@ -31,7 +31,7 @@ engine.addProvider(new FixtureSubprovider({
   eth_hashrate: '0x00',
   eth_mining: false,
   eth_syncing: true,
-})
+}))
 
 // cache layer
 engine.addProvider(new CacheSubprovider())
@@ -72,7 +72,13 @@ engine.on('error', function(err){
 
 // start polling for blocks
 engine.start()
+```
 
+When importing in webpack:
+```js
+import * as Web3ProviderEngine  from 'web3-provider-engine';
+import * as RpcSource  from 'web3-provider-engine/subproviders/rpc';
+import * as HookedWalletSubprovider from 'web3-provider-engine/subproviders/hooked-wallet';
 ```
 
 ### Built For Zero-Clients
@@ -84,81 +90,3 @@ Categorically, we don’t want / can’t have the following types of RPC calls g
 * id mgmt + tx signing (requires private data)
 * filters (requires a stateful data api)
 * vm (expensive, hard to scale)
-
-
-### Current RPC method support:
-
-##### static
-- [x] web3_clientVersion
-- [x] net_version
-- [x] net_listening
-- [x] net_peerCount
-- [x] eth_protocolVersion
-- [x] eth_hashrate
-- [x] eth_mining
-- [x] eth_syncing
-
-##### filters
-- [x] eth_newBlockFilter
-- [x] eth_newPendingTransactionFilter
-- [x] eth_newFilter
-- [x] eth_uninstallFilter
-- [x] eth_getFilterLogs
-- [x] eth_getFilterChanges
-
-##### accounts manager
-- [x] eth_coinbase
-- [x] eth_accounts
-- [x] eth_sendTransaction
-- [x] eth_sign
-
-##### vm
-- [x] eth_call
-- [x] eth_estimateGas
-
-##### db source
-- [ ] db_putString
-- [ ] db_getString
-- [ ] db_putHex
-- [ ] db_getHex
-
-##### compiler
-- [ ] eth_getCompilers
-- [ ] eth_compileLLL
-- [ ] eth_compileSerpent
-- [ ] eth_compileSolidity
-
-##### shh gateway
-- [ ] shh_version
-- [ ] shh_post
-- [ ] shh_newIdentity
-- [ ] shh_hasIdentity
-- [ ] shh_newGroup
-- [ ] shh_addToGroup
-
-##### data source ( fallback to rpc )
-* eth_gasPrice
-* eth_blockNumber
-* eth_getBalance
-* eth_getBlockByHash
-* eth_getBlockByNumber
-* eth_getBlockTransactionCountByHash
-* eth_getBlockTransactionCountByNumber
-* eth_getCode
-* eth_getStorageAt
-* eth_getTransactionByBlockHashAndIndex
-* eth_getTransactionByBlockNumberAndIndex
-* eth_getTransactionByHash
-* eth_getTransactionCount
-* eth_getTransactionReceipt
-* eth_getUncleByBlockHashAndIndex
-* eth_getUncleByBlockNumberAndIndex
-* eth_getUncleCountByBlockHash
-* eth_getUncleCountByBlockNumber
-* eth_sendRawTransaction
-* eth_getLogs ( not used in web3.js )
-
-##### ( not supported )
-* eth_getWork
-* eth_submitWork
-* eth_submitHashrate ( not used in web3.js )
